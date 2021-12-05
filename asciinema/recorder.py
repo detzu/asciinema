@@ -46,8 +46,8 @@ def record(path, command=None, append=False, idle_time_limit=None,
     if append and os.stat(path).st_size > 0:
         time_offset = v2.get_duration(path)
 
-    with async_writer(writer, path, full_metadata, append) as w:
-        with async_notifier(notifier) as n:
+    with async_notifier(notifier) as n:
+        with async_writer(writer, path, full_metadata, append, notifier_q=n.queue) as w:
             record(
                 ['sh', '-c', command],
                 w,
@@ -60,12 +60,13 @@ def record(path, command=None, append=False, idle_time_limit=None,
 
 
 class async_writer(async_worker):
-    def __init__(self, writer, path, metadata, append=False):
+    def __init__(self, writer, path, metadata, append=False, notifier_q=None):
         async_worker.__init__(self)
         self.writer = writer
         self.path = path
         self.metadata = metadata
         self.append = append
+        self.notifier_q = notifier_q
 
     def write_stdin(self, ts, data):
         self.enqueue([ts, 'i', data])
@@ -74,7 +75,7 @@ class async_writer(async_worker):
         self.enqueue([ts, 'o', data])
 
     def run(self):
-        with self.writer(self.path, metadata=self.metadata, append=self.append) as w:
+        with self.writer(self.path, metadata=self.metadata, append=self.append, on_error=self.__on_error) as w:
             for event in iter(self.queue.get, None):
                 ts, etype, data = event
 
@@ -82,6 +83,10 @@ class async_writer(async_worker):
                     w.write_stdout(ts, data)
                 elif etype == 'i':
                     w.write_stdin(ts, data)
+
+    def __on_error(self, reason):
+        if self.notifier_q:
+            self.notifier_q.put(reason)
 
 
 class async_notifier(async_worker):

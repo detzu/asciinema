@@ -2,6 +2,9 @@ import json
 import json.decoder
 import time
 import codecs
+import os
+import stat
+
 
 try:
     JSONDecodeError = json.decoder.JSONDecodeError
@@ -82,11 +85,12 @@ def build_header(width, height, metadata):
 
 class writer():
 
-    def __init__(self, path, metadata=None, append=False, buffering=1, width=None, height=None):
+    def __init__(self, path, metadata=None, append=False, buffering=1, width=None, height=None, on_error=None):
         self.path = path
         self.buffering = buffering
         self.stdin_decoder = codecs.getincrementaldecoder('UTF-8')('replace')
         self.stdout_decoder = codecs.getincrementaldecoder('UTF-8')('replace')
+        self.on_error = on_error
 
         if append:
             self.mode = 'a'
@@ -123,4 +127,19 @@ class writer():
 
     def __write_line(self, obj):
         line = json.dumps(obj, ensure_ascii=False, indent=None, separators=(', ', ': '))
-        self.file.write(line + '\n')
+
+        try:
+            self.file.write(line + '\n')
+        except BrokenPipeError as e:
+            if stat.S_ISFIFO(os.stat(self.path).st_mode):
+                if self.on_error:
+                    self.on_error('Broken pipe, reopening...')
+
+                self.file = open(self.path, mode=self.mode, buffering=self.buffering)
+
+                if self.on_error:
+                    self.on_error('Output pipe reopened successfully')
+
+                self.file.write(line + '\n')
+            else:
+                raise e
